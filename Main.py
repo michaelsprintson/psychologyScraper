@@ -1,0 +1,3 @@
+import TwitterScraper
+
+TwitterScraper.runTwitterScraper()
