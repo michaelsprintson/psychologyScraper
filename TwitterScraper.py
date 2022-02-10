@@ -1,12 +1,15 @@
-from . import config
+import config
 import requests
 import json
 import csv
-from . import TextAnalyzer
+import TextAnalyzer
 import time
 import datetime as DT
 from dateutil import parser
 from tqdm import tqdm
+import ast
+from nltk.corpus import stopwords
+import pandas as pd
 
 ## General information: This piece of code sends requests to twitter about the desired keywords. If found, it is written in a csv file.
 
@@ -47,46 +50,75 @@ def createSearchStrings():
     searchStrings.append(currentString)
     return searchStrings
 
-def runTwitterScraper():
-
+def runTwitterScraper(location = 'test.txt'):
+    
     today = DT.datetime.now(DT.timezone.utc)
     # week_ago = today - DT.timedelta(days=7)
+    current_oldest_date = today
 
     responseCount = 1
+    counter = 0
+    tweets_processed = 0
     with tqdm(total=604800) as pbar:
         for searchString in createSearchStrings():
             url = create_url(searchString)
             continueFlag = True
             nextToken = {}
             while continueFlag:
-                time.sleep(5)
-                json_response = connect_to_endpoint(url[0], {"Authorization": "Bearer {}".format(config.twitter_bearer_token)}, url[1], nextToken)
+                time.sleep(1)
+                counter += 1
+                #grab json response
+                json_response = connect_to_endpoint(url[0], {"Authorization": "Bearer {}".format(config.twitter_bearer_token[counter % 5])}, url[1], nextToken)
+                # calculate progress bar update
+                tweets_processed += json_response['meta']['result_count']
                 page_oldest_date = parser.parse(([i for i in json_response['data'] if i['id'] == json_response['meta']['oldest_id']][0]['created_at']))
-                final_val = (today - page_oldest_date).total_seconds()
+                if page_oldest_date < current_oldest_date: #if its older
+                    current_oldest_date = page_oldest_date
+                final_val = (today - current_oldest_date).total_seconds()
                 pbar.update(int(final_val) - pbar.n)
-
-                rc = json_response['meta']['result_count']
-                if int(rc) < 90:
-                    print(f"Response page: {responseCount}, {rc}")
+                pbar.desc = f"processed {tweets_processed} tweets - "
                 
+                #process each response, write to file if within spec
                 if "data" in json_response:
                     for response in json_response["data"]:
                         if (TextAnalyzer.textPasses(response["text"])):
                             # print(response, '\n\n')
-                            with open("test.txt", "a") as myfile:
+                            with open(location, "a") as myfile:
+                                #in response data, correct all quotations to be not excepted
                                 myfile.write(response.__repr__() + "\n")
                             responseCount += 1
+                #
                 if "next_token" not in json_response["meta"]:
                     print("stopped, no next token")
                     continueFlag = False
                 else:
-                    if responseCount > 10:
-                        continueFlag = False
+                    # if responseCount > 10:
+                    #     continueFlag = False
                     nextToken = json_response["meta"]["next_token"] 
 
     
 
     # for validResponse in valid_responses:
     #     csvWriter.writerow(validResponse)
-    
-    
+
+def write_to_csv(location = 'test.txt', output = "output.csv"):
+    keys = ['id', 'author_id', 'created_at', 'text']
+    with open(location) as file:
+        responses = file.readlines()
+    to_pd = [ast.literal_eval(res) for res in responses]
+    a_file = open(output, "w")
+    dict_writer = csv.DictWriter(a_file, keys)
+    dict_writer.writeheader()
+    dict_writer.writerows(to_pd)
+    a_file.close()
+    print(f"wrote {location} to {output}")
+    return to_pd
+
+def get_relevant_words(to_pd):
+    tdf = pd.DataFrame(to_pd)
+    twitter_stops = stopwords.words('english') + ['RT', 'I', 'if','&amp;', 'if', 'it\'s', '\r', '\t', '\n', '-']
+    words = [i.lower().replace(',', '').replace('\'', '') for j in [i.split(' ') for i in tdf['text'].values] for i in j if i not in twitter_stops]
+    return words
+
+def filter_by_word(tdf, word):
+    return tdf[tdf['text'].apply(lambda s: word in s)]
